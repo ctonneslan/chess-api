@@ -7,3 +7,5 @@ npm-debug.log
 .DS_Store
 coverage
 dist
+prometheus.yml
+docker-compose.yml
