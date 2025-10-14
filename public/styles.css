@@ -1,0 +1,17 @@
+body { font-family: sans-serif; text-align: center; }
+.board {
+  display: grid;
+  grid-template-columns: repeat(8, 60px);
+  width: 480px;
+  margin: 20px auto;
+}
+.square {
+  width: 60px;
+  height: 60px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 36px;
+}
+.light { background: #eee; }
+.dark { background: #555; color: white; }
