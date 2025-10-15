@@ -1,135 +1,267 @@
-import express from "express";
-import cors from "cors";
-import { Chess } from "chess.js";
-import { register, moveCounter, metricsMiddleware } from "./metrics.js";
-import axios from "axios";
-import { evaluatePosition } from "./engine.js";
+// Import required packages
+import express from 'express';
+import cors from 'cors';
+import axios from 'axios';
+import { Chess } from 'chess.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { extractMovesFromPGN } from './analyzer.js';
 
+// Get current directory (needed for ES modules)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Create Express application
 const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(metricsMiddleware);
-app.use(express.static("public"));
+const PORT = 3000;
 
-const game = new Chess();
+// Middleware setup
+app.use(cors()); // Enable CORS for frontend communication
+app.use(express.json()); // Parse JSON request bodies
+app.use(express.static(path.join(__dirname, '../public'))); // Serve static files from public folder
 
-// Health
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "chess-api" });
+// Test endpoint to verify server is running
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'Server is running!' });
 });
 
-// Fetch board
-app.get("/board", (_req, res) => {
-  res.json({ fen: game.fen(), turn: game.turn() });
-});
-
-// Make move
-app.post("/move", (req, res) => {
-  const { from, to } = req.body;
-  const move = game.move({ from, to });
-  if (!move) return res.status(400).json({ error: "Invalid move" });
-  moveCounter.inc();
-  res.json({ fen: game.fen(), move });
-});
-
-// Prometheus endpoint
-app.get("/metrics", async (_req, res) => {
-  res.set("Content-Type", register.contentType);
-  res.end(await register.metrics());
-});
-
-// Fetch history
-app.get("/history/:username", async (req, res) => {
+// Fetch user's game history from Chess.com
+app.get('/api/games/:username', async (req, res) => {
   try {
+    // Get username from URL parameter
     const { username } = req.params;
-    const { data } = await axios.get(
-      `https://api.chess.com/pub/player/${username}/games/archives`
-    );
 
-    // flatten all month URLs into one list of games
-    const games = [];
-    for (const monthUrl of data.archives.slice(-3)) {
-      // latest 3 months
-      const monthData = await axios.get(monthUrl);
-      games.push(...monthData.data.games);
-    }
+    // Get current year and month for Chess.com API
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0'); // Months are 0-indexed
 
-    res.json({ count: games.length, games });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to fetch history" });
+    // Chess.com API URL for monthly archives
+    const url = `https://api.chess.com/pub/player/${username}/games/${year}/${month}`;
+
+    // Make request to Chess.com API
+    const response = await axios.get(url);
+
+    // Return the games data
+    res.json({
+      username,
+      gamesCount: response.data.games.length,
+      games: response.data.games
+    });
+
+  } catch (error) {
+    // Handle errors (user not found, network issues, etc.)
+    res.status(500).json({
+      error: 'Failed to fetch games',
+      message: error.message
+    });
   }
 });
 
-function cleanPgn(pgn) {
-  return (
-    pgn
-      // remove clock annotations and comments
-      .replace(/\{[^}]*\}/g, "")
-      // remove numeric annotation glyphs like $1, $2, etc.
-      .replace(/\$\d+/g, "")
-      .trim()
-  );
-}
-
-app.get("/blunders/:username", async (req, res) => {
+// Analyze a specific game and find mistakes/blunders
+app.post('/api/analyze', async (req, res) => {
   try {
-    const { username } = req.params;
-    const { data } = await axios.get(
-      `https://api.chess.com/pub/player/${username}/games/archives`
-    );
+    // Get PGN from request body
+    const { pgn, playerColor } = req.body;
 
-    const lastMonth = data.archives.slice(-1)[0];
-    const { data: monthData } = await axios.get(lastMonth);
-    const games = monthData.games.slice(0, 5); // analyze first 5 for now
+    if (!pgn) {
+      return res.status(400).json({ error: 'PGN is required' });
+    }
 
-    const results = [];
+    // Parse the game
+    const game = new Chess();
+    game.loadPgn(pgn);
 
-    for (const game of games) {
-      if (!game.pgn) continue;
-      const cleaned = cleanPgn(game.pgn);
+    // Get move history
+    const moves = game.history({ verbose: true });
 
-      const board = new Chess();
-      board.loadPgn(cleaned); // safe built-in parser
+    // Analyze each move and find mistakes
+    const mistakes = [];
+    const gameAnalysis = new Chess(); // Fresh game for replay
 
-      const history = board.history({ verbose: true });
-      let tempBoard = new Chess();
+    for (let i = 0; i < moves.length; i++) {
+      const move = moves[i];
+      const moveNumber = Math.floor(i / 2) + 1;
+      const side = move.color === 'w' ? 'white' : 'black';
 
-      for (const move of history) {
-        const fenBefore = tempBoard.fen();
-        tempBoard.move(move.san);
-        const fenAfter = tempBoard.fen();
+      // Only analyze moves for the specified player color if provided
+      if (playerColor && side !== playerColor) {
+        gameAnalysis.move(move.san);
+        continue;
+      }
 
-        const evalBefore = await evaluatePosition(fenBefore);
-        const evalAfter = await evaluatePosition(fenAfter);
+      // Store position before move
+      const fenBefore = gameAnalysis.fen();
 
-        const swing = evalAfter - evalBefore;
+      // Make the move
+      gameAnalysis.move(move.san);
 
-        if (swing < -150) {
-          results.push({
-            game_url: game.url,
-            move: move.san,
-            fen: fenBefore,
-            eval_change: swing,
-          });
-        }
+      // Detect obvious blunders (hanging pieces, missing checkmate, etc.)
+      const blunderType = detectBlunder(gameAnalysis, move);
+
+      if (blunderType) {
+        mistakes.push({
+          moveNumber,
+          side,
+          move: move.san,
+          fen: fenBefore,
+          type: blunderType,
+          description: getBlunderDescription(blunderType)
+        });
       }
     }
 
-    res.json({ count: results.length, blunders: results });
-  } catch (err) {
-    console.error("Blunder analysis error:", err);
-    res.status(500).json({ error: "Failed to analyze blunders" });
+    res.json({
+      totalMoves: moves.length,
+      mistakesFound: mistakes.length,
+      mistakes
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to analyze game',
+      message: error.message
+    });
   }
 });
 
-app.use((req, _res, next) => {
-  const err = new Error(`Not Found: ${req.method} ${req.originalUrl}`);
-  err.status = 404;
-  next(err);
+// Helper function to detect basic blunders
+function detectBlunder(game, move) {
+  // Check if opponent is in checkmate (you won!)
+  if (game.isCheckmate()) {
+    return null; // Not a blunder, you won!
+  }
+
+  // Check if move hangs a piece (captured piece is more valuable than capturing piece)
+  if (move.captured) {
+    const pieceValues = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+    const capturedValue = pieceValues[move.captured];
+    const movedValue = pieceValues[move.piece];
+
+    // If you captured with a more valuable piece, might be a blunder
+    if (movedValue > capturedValue + 1) {
+      return 'bad_trade';
+    }
+  }
+
+  // Check if the moved piece is now under attack and undefended
+  // This is a simplified check - real engine would be more accurate
+  const threats = getThreats(game, move.to);
+  if (threats.length > 0) {
+    return 'hanging_piece';
+  }
+
+  return null;
+}
+
+// Helper function to get threats to a square
+function getThreats(game, square) {
+  const threats = [];
+  const turn = game.turn();
+
+  // Get all possible moves for the opponent
+  const moves = game.moves({ verbose: true });
+
+  for (const move of moves) {
+    if (move.to === square && move.captured) {
+      threats.push(move);
+    }
+  }
+
+  return threats;
+}
+
+// Helper function to describe blunder types
+function getBlunderDescription(type) {
+  const descriptions = {
+    'hanging_piece': 'Piece left undefended and can be captured',
+    'bad_trade': 'Traded a more valuable piece for a less valuable one',
+    'missed_checkmate': 'Missed an opportunity for checkmate',
+    'allows_checkmate': 'Move allows opponent to deliver checkmate'
+  };
+
+  return descriptions[type] || 'Mistake detected';
+}
+
+// Generate puzzles from a game's mistakes
+app.post('/api/puzzles', async (req, res) => {
+  try {
+    const { pgn, playerColor } = req.body;
+
+    if (!pgn) {
+      return res.status(400).json({ error: 'PGN is required' });
+    }
+
+    // First, analyze the game to find mistakes
+    const game = new Chess();
+    game.loadPgn(pgn);
+    const moves = game.history({ verbose: true });
+
+    const puzzles = [];
+    const gameReplay = new Chess();
+
+    for (let i = 0; i < moves.length; i++) {
+      const move = moves[i];
+      const side = move.color === 'w' ? 'white' : 'black';
+
+      // Only create puzzles for specified player's mistakes
+      if (playerColor && side !== playerColor) {
+        gameReplay.move(move.san);
+        continue;
+      }
+
+      // Store position before the mistake
+      const fenBefore = gameReplay.fen();
+
+      // Make the move
+      gameReplay.move(move.san);
+
+      // Detect if this was a blunder
+      const blunderType = detectBlunder(gameReplay, move);
+
+      if (blunderType) {
+        // Get the best moves in this position (legal moves)
+        const chessCopy = new Chess(fenBefore);
+        const legalMoves = chessCopy.moves({ verbose: true });
+
+        // Find better alternatives (not the blunder)
+        const alternatives = legalMoves
+          .filter(m => m.san !== move.san)
+          .slice(0, 3) // Top 3 alternatives
+          .map(m => m.san);
+
+        // Create puzzle
+        puzzles.push({
+          id: puzzles.length + 1,
+          fen: fenBefore, // Starting position for puzzle
+          blunderMove: move.san,
+          correctMoves: alternatives,
+          side: side,
+          difficulty: blunderType === 'hanging_piece' ? 'easy' : 'medium',
+          description: `Find a better move than ${move.san}`,
+          blunderType,
+          moveNumber: Math.floor(i / 2) + 1
+        });
+      }
+
+      // Limit to 10 puzzles max
+      if (puzzles.length >= 10) break;
+    }
+
+    res.json({
+      puzzlesGenerated: puzzles.length,
+      puzzles
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to generate puzzles',
+      message: error.message
+    });
+  }
 });
 
-const PORT = process.env.PORT || 3000;
+// Start the server
 app.listen(PORT, () => {
-  console.log(`✅ chess-api running on http://localhost:${PORT}`);
+  console.log(`Chess Puzzle API running on http://localhost:${PORT}`);
 });

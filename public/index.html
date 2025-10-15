@@ -1,13 +1,72 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Chess API Visualization</title>
-    <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chess Puzzle Generator - Learn from Your Mistakes</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <h1>Chess API Visualization</h1>
-    <div id="board" class="board"></div>
-    <script type="module" src="script.js"></script>
+  <!-- Header -->
+  <header>
+    <h1>Chess Puzzle Generator</h1>
+    <p>Learn from your Chess.com games by solving puzzles from your mistakes</p>
+  </header>
+
+  <!-- Main Container -->
+  <main class="container">
+
+    <!-- Step 1: Fetch Games -->
+    <section id="fetch-section" class="card">
+      <h2>Step 1: Fetch Your Games</h2>
+      <div class="input-group">
+        <label for="username">Chess.com Username:</label>
+        <input
+          type="text"
+          id="username"
+          placeholder="Enter username (e.g., hikaru)"
+          autocomplete="off"
+        >
+        <button id="fetch-btn" class="btn btn-primary">Fetch Games</button>
+      </div>
+      <div id="games-result" class="result-area"></div>
+    </section>
+
+    <!-- Step 2: Select Game -->
+    <section id="select-section" class="card" style="display: none;">
+      <h2>Step 2: Select a Game</h2>
+      <div id="games-list" class="games-grid"></div>
+    </section>
+
+    <!-- Step 3: Generate Puzzles -->
+    <section id="puzzles-section" class="card" style="display: none;">
+      <h2>Step 3: Your Puzzles</h2>
+      <div id="puzzles-info" class="info-box"></div>
+      <div id="puzzles-list" class="puzzles-container"></div>
+    </section>
+
+    <!-- Step 4: Solve Puzzle -->
+    <section id="solve-section" class="card" style="display: none;">
+      <h2>Solve the Puzzle</h2>
+      <div class="puzzle-interface">
+        <div id="puzzle-info" class="puzzle-header"></div>
+        <div id="chessboard" class="chessboard"></div>
+        <div id="puzzle-controls" class="controls">
+          <button id="hint-btn" class="btn btn-secondary">Show Hint</button>
+          <button id="next-puzzle-btn" class="btn btn-primary">Next Puzzle</button>
+        </div>
+        <div id="feedback" class="feedback"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <p>Built with vanilla HTML, CSS, and JavaScript</p>
+  </footer>
+
+  <!-- JavaScript -->
+  <script src="script.js"></script>
 </body>
 </html>
