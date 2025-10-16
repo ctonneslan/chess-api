@@ -50,10 +50,13 @@
       <h2>Solve the Puzzle</h2>
       <div class="puzzle-interface">
         <div id="puzzle-info" class="puzzle-header"></div>
-        <div id="chessboard" class="chessboard"></div>
+        <div class="board-container">
+          <div id="chessboard" class="chessboard"></div>
+        </div>
         <div id="puzzle-controls" class="controls">
-          <button id="hint-btn" class="btn btn-secondary">Show Hint</button>
-          <button id="next-puzzle-btn" class="btn btn-primary">Next Puzzle</button>
+          <button id="retry-btn" class="btn btn-secondary">↻ Retry</button>
+          <button id="hint-btn" class="btn btn-secondary">💡 Hint</button>
+          <button id="next-puzzle-btn" class="btn btn-primary">Next →</button>
         </div>
         <div id="feedback" class="feedback"></div>
       </div>

@@ -23,11 +23,13 @@ const solveSection = document.getElementById('solve-section');
 const puzzleInfo = document.getElementById('puzzle-info');
 const chessboard = document.getElementById('chessboard');
 const feedback = document.getElementById('feedback');
+const retryBtn = document.getElementById('retry-btn');
 const hintBtn = document.getElementById('hint-btn');
 const nextPuzzleBtn = document.getElementById('next-puzzle-btn');
 
 // Event Listeners
 fetchBtn.addEventListener('click', fetchGames);
+retryBtn.addEventListener('click', retryPuzzle);
 hintBtn.addEventListener('click', showHint);
 nextPuzzleBtn.addEventListener('click', nextPuzzle);
 
@@ -225,31 +227,86 @@ function startPuzzle(index) {
  * Initialize chess board
  */
 function initializeBoard(fen) {
-  // Parse FEN to get board state
+  // Parse FEN to get board state and whose turn it is
   const position = fenToBoard(fen);
+  const activeColor = fen.split(' ')[1]; // 'w' or 'b'
   state.currentPosition = position;
+  state.initialFen = fen; // Store for retry
 
-  // Clear board
-  chessboard.innerHTML = '';
+  // Get board container
+  const boardContainer = chessboard.parentElement;
+  boardContainer.innerHTML = ''; // Clear everything
 
-  // Create 8x8 grid
+  // Create board wrapper (for Chess.com dark border effect)
+  const boardWrapper = document.createElement('div');
+  boardWrapper.className = 'board-wrapper';
+
+  // Recreate chessboard div
+  const newBoard = document.createElement('div');
+  newBoard.id = 'chessboard';
+  newBoard.className = 'chessboard';
+  boardWrapper.appendChild(newBoard);
+  boardContainer.appendChild(boardWrapper);
+
+  // Update global reference
+  const board = newBoard;
+
+  // Determine if board should be flipped (black to move = flip)
+  const shouldFlip = activeColor === 'b';
+
+  // Update board flip class
+  if (shouldFlip) {
+    board.classList.add('flipped');
+  } else {
+    board.classList.remove('flipped');
+  }
+
+  // File and rank labels
+  const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+  const ranks = ['8', '7', '6', '5', '4', '3', '2', '1'];
+
+  // Create 8x8 grid of squares
   for (let row = 0; row < 8; row++) {
     for (let col = 0; col < 8; col++) {
       const square = document.createElement('div');
-      square.className = `square ${(row + col) % 2 === 0 ? 'light' : 'dark'}`;
+      const isLight = (row + col) % 2 === 0;
+      square.className = `square ${isLight ? 'light' : 'dark'}`;
       square.dataset.row = row;
       square.dataset.col = col;
+
+      // Add coordinate labels only on edges
+      // Files (a-h) on bottom row (rank 1)
+      if (row === 7) {
+        const fileLabel = document.createElement('span');
+        fileLabel.className = 'board-coords file';
+        fileLabel.textContent = files[col];
+        square.appendChild(fileLabel);
+      }
+
+      // Ranks (8-1) on left column (a-file)
+      if (col === 0) {
+        const rankLabel = document.createElement('span');
+        rankLabel.className = 'board-coords rank';
+        rankLabel.textContent = ranks[row];
+        square.appendChild(rankLabel);
+      }
 
       // Add piece if present
       const piece = position[row][col];
       if (piece) {
-        square.textContent = getPieceSymbol(piece);
+        const pieceSpan = document.createElement('span');
+        pieceSpan.className = 'piece';
+        pieceSpan.textContent = getPieceSymbol(piece);
+        square.appendChild(pieceSpan);
       }
 
       square.addEventListener('click', () => handleSquareClick(row, col));
-      chessboard.appendChild(square);
+      board.appendChild(square);
     }
   }
+
+  // Update the global chessboard reference
+  window.chessboard = board;
 }
 
 /**
@@ -299,16 +356,30 @@ function getPieceSymbol(piece) {
 let selectedSquare = null;
 
 function handleSquareClick(row, col) {
-  const puzzle = state.puzzles[state.currentPuzzleIndex];
-
   if (!selectedSquare) {
     // Select piece
     const piece = state.currentPosition[row][col];
     if (piece) {
-      selectedSquare = { row, col, piece };
-      highlightSquare(row, col);
+      // Check if piece belongs to the side to move
+      const puzzle = state.puzzles[state.currentPuzzleIndex];
+      const isWhite = piece === piece.toUpperCase();
+      const shouldBeWhite = puzzle.side === 'white';
+
+      if (isWhite === shouldBeWhite) {
+        selectedSquare = { row, col, piece };
+        highlightSquare(row, col);
+        showLegalMoves(row, col);
+      }
     }
   } else {
+    // If clicking the same square, deselect
+    if (selectedSquare.row === row && selectedSquare.col === col) {
+      clearHighlight();
+      clearLegalMoves();
+      selectedSquare = null;
+      return;
+    }
+
     // Try to make move
     const from = selectedSquare;
     const to = { row, col };
@@ -317,10 +388,11 @@ function handleSquareClick(row, col) {
     const moveNotation = convertToNotation(from, to, from.piece);
 
     // Check if move is correct
-    checkMove(moveNotation);
+    checkMove(moveNotation, from, to);
 
     // Clear selection
     clearHighlight();
+    clearLegalMoves();
     selectedSquare = null;
   }
 }
@@ -329,7 +401,8 @@ function handleSquareClick(row, col) {
  * Highlight selected square
  */
 function highlightSquare(row, col) {
-  const squares = chessboard.querySelectorAll('.square');
+  const board = window.chessboard || document.getElementById('chessboard');
+  const squares = board.querySelectorAll('.square');
   squares.forEach(sq => {
     const sqRow = parseInt(sq.dataset.row);
     const sqCol = parseInt(sq.dataset.col);
@@ -343,8 +416,52 @@ function highlightSquare(row, col) {
  * Clear highlight
  */
 function clearHighlight() {
-  const squares = chessboard.querySelectorAll('.square');
+  const board = window.chessboard || document.getElementById('chessboard');
+  const squares = board.querySelectorAll('.square');
   squares.forEach(sq => sq.classList.remove('selected'));
+}
+
+/**
+ * Show legal moves for selected piece (simplified - shows all empty squares and captures)
+ */
+function showLegalMoves(row, col) {
+  const piece = state.currentPosition[row][col];
+  if (!piece) return;
+
+  const isWhite = piece === piece.toUpperCase();
+  const board = window.chessboard || document.getElementById('chessboard');
+  const squares = board.querySelectorAll('.square');
+
+  squares.forEach(sq => {
+    const sqRow = parseInt(sq.dataset.row);
+    const sqCol = parseInt(sq.dataset.col);
+    const targetPiece = state.currentPosition[sqRow][sqCol];
+
+    // Skip the selected square itself
+    if (sqRow === row && sqCol === col) return;
+
+    // Simplified legal move logic (not perfect, but good enough for demo)
+    // In reality, you'd use chess.js for this
+
+    // Allow moves to empty squares or captures of opposite color
+    if (!targetPiece) {
+      sq.classList.add('legal-move');
+    } else {
+      const targetIsWhite = targetPiece === targetPiece.toUpperCase();
+      if (isWhite !== targetIsWhite) {
+        sq.classList.add('legal-move', 'has-piece');
+      }
+    }
+  });
+}
+
+/**
+ * Clear legal move highlights
+ */
+function clearLegalMoves() {
+  const board = window.chessboard || document.getElementById('chessboard');
+  const squares = board.querySelectorAll('.square');
+  squares.forEach(sq => sq.classList.remove('legal-move', 'has-piece'));
 }
 
 /**
@@ -365,9 +482,17 @@ function convertToNotation(from, to, piece) {
 /**
  * Check if move is correct
  */
-function checkMove(move) {
+function checkMove(move, from, to) {
   const puzzle = state.puzzles[state.currentPuzzleIndex];
   const correctMoves = puzzle.correctMoves;
+
+  // Make the move on the board
+  const piece = state.currentPosition[from.row][from.col];
+  state.currentPosition[to.row][to.col] = piece;
+  state.currentPosition[from.row][from.col] = null;
+
+  // Update the visual board
+  updateBoardDisplay();
 
   // Check if move is in correct moves list
   const isCorrect = correctMoves.some(correctMove =>
@@ -385,11 +510,62 @@ function checkMove(move) {
 }
 
 /**
+ * Update board display after a move
+ */
+function updateBoardDisplay() {
+  const board = window.chessboard || document.getElementById('chessboard');
+  const squares = board.querySelectorAll('.square');
+
+  squares.forEach(sq => {
+    const row = parseInt(sq.dataset.row);
+    const col = parseInt(sq.dataset.col);
+    const piece = state.currentPosition[row][col];
+
+    // Remove existing piece (but keep coordinates)
+    const existingPiece = sq.querySelector('.piece');
+    if (existingPiece) {
+      existingPiece.remove();
+    }
+
+    // Add piece if present
+    if (piece) {
+      const pieceSpan = document.createElement('span');
+      pieceSpan.className = 'piece';
+      pieceSpan.textContent = getPieceSymbol(piece);
+      sq.appendChild(pieceSpan);
+    }
+  });
+}
+
+/**
  * Show feedback message
  */
 function showFeedback(message, type) {
   feedback.textContent = message;
   feedback.className = `feedback show ${type}`;
+}
+
+/**
+ * Retry current puzzle
+ */
+function retryPuzzle() {
+  // Reset board to initial position
+  if (state.initialFen) {
+    initializeBoard(state.initialFen);
+  }
+
+  // Clear feedback
+  feedback.classList.remove('show', 'success', 'error', 'hint');
+
+  // Clear any selected squares
+  selectedSquare = null;
+  clearHighlight();
+  clearLegalMoves();
+
+  showFeedback('Board reset! Try again.', 'hint');
+  setTimeout(() => {
+    feedback.classList.remove('show');
+  }, 1500);
 }
 
 /**
